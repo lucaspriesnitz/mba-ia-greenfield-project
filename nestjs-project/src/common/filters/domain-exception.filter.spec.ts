@@ -9,6 +9,11 @@ import {
   TokenReuseDetectedException,
 } from '../exceptions/domain.exception';
 
+type RpcArgumentsHost = ReturnType<ArgumentsHost['switchToRpc']>;
+type WsArgumentsHost = ReturnType<ArgumentsHost['switchToWs']>;
+
+const anyString: unknown = expect.any(String);
+
 describe('DomainExceptionFilter', () => {
   let filter: DomainExceptionFilter;
   let mockJson: jest.Mock;
@@ -27,8 +32,8 @@ describe('DomainExceptionFilter', () => {
       }),
       getArgs: () => [],
       getArgByIndex: () => null,
-      switchToRpc: () => ({}) as any,
-      switchToWs: () => ({}) as any,
+      switchToRpc: () => ({}) as RpcArgumentsHost,
+      switchToWs: () => ({}) as WsArgumentsHost,
       getType: () => 'http',
     } as unknown as ArgumentsHost;
   });
@@ -51,7 +56,7 @@ describe('DomainExceptionFilter', () => {
     expect(mockJson).toHaveBeenCalledWith({
       statusCode: 401,
       error: 'INVALID_CREDENTIALS',
-      message: expect.any(String),
+      message: anyString,
     });
   });
 
@@ -62,7 +67,7 @@ describe('DomainExceptionFilter', () => {
     expect(mockJson).toHaveBeenCalledWith({
       statusCode: 403,
       error: 'EMAIL_NOT_CONFIRMED',
-      message: expect.any(String),
+      message: anyString,
     });
   });
 
@@ -73,7 +78,7 @@ describe('DomainExceptionFilter', () => {
     expect(mockJson).toHaveBeenCalledWith({
       statusCode: 401,
       error: 'INVALID_TOKEN',
-      message: expect.any(String),
+      message: anyString,
     });
   });
 
@@ -84,7 +89,7 @@ describe('DomainExceptionFilter', () => {
     expect(mockJson).toHaveBeenCalledWith({
       statusCode: 401,
       error: 'TOKEN_EXPIRED',
-      message: expect.any(String),
+      message: anyString,
     });
   });
 
@@ -95,7 +100,7 @@ describe('DomainExceptionFilter', () => {
     expect(mockJson).toHaveBeenCalledWith({
       statusCode: 401,
       error: 'TOKEN_REUSE_DETECTED',
-      message: expect.any(String),
+      message: anyString,
     });
   });
 });
