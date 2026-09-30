@@ -1,6 +1,6 @@
 services:
   nestjs-api:
-    build: 
+    build:
       context: .
       dockerfile: Dockerfile.dev
     ports:
@@ -12,6 +12,10 @@ services:
         condition: service_healthy
       mailpit:
         condition: service_started
+      minio:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
   db:
     image: postgres:17
@@ -33,4 +37,67 @@ services:
       - "1025:1025"
       - "8025:8025"
 
+  minio:
+    image: chainguard/minio
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      - MINIO_ROOT_USER=${STORAGE_ACCESS_KEY}
+      - MINIO_ROOT_PASSWORD=${STORAGE_SECRET_KEY}
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "mc ready local || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
+  # One-shot bucket provisioning. Creates the single bucket idempotently and
+  # attaches no public-read policy — every object is reached through a presigned
+  # URL (per phase-03-videos/TD-01).
+  minio-init:
+    image: chainguard/minio
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      - STORAGE_ACCESS_KEY=${STORAGE_ACCESS_KEY}
+      - STORAGE_SECRET_KEY=${STORAGE_SECRET_KEY}
+      - STORAGE_BUCKET=${STORAGE_BUCKET:-streamtube}
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 \"$$STORAGE_ACCESS_KEY\" \"$$STORAGE_SECRET_KEY\" &&
+      mc mb --ignore-existing local/\"$$STORAGE_BUCKET\" &&
+      mc anonymous set none local/\"$$STORAGE_BUCKET\" &&
+      echo \"bucket $$STORAGE_BUCKET ready (no public access)\"
+      "
+    restart: "no"
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  video-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    volumes:
+      - .:/home/node/app
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
+volumes:
+  minio-data:

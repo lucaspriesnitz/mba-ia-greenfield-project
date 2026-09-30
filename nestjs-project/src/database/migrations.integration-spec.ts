@@ -14,6 +14,10 @@ const MANAGED_TABLES = [
   'verification_tokens',
 ];
 
+// Enum types created by the managed migrations. They survive DROP TABLE, so the
+// suite has to drop them explicitly — see the note in beforeAll.
+const MANAGED_ENUM_TYPES = ['verification_tokens_type_enum'];
+
 describe('Database migrations (integration)', () => {
   let dataSource: DataSource;
 
@@ -37,6 +41,15 @@ describe('Database migrations (integration)', () => {
       ),
       dataSource.query(`DROP TABLE IF EXISTS "migrations" CASCADE`),
     ]);
+
+    // Dropping the tables is not enough: the enum types outlive them and can
+    // only be dropped afterwards, because of the dependency. Without this the
+    // afterAll below re-applies the migrations, leaves the type resident, and
+    // the next run of this suite dies on CREATE TYPE ... already exists —
+    // making a green suite depend on the parity of the run.
+    for (const type of MANAGED_ENUM_TYPES) {
+      await dataSource.query(`DROP TYPE IF EXISTS "${type}" CASCADE`);
+    }
   });
 
   afterAll(async () => {

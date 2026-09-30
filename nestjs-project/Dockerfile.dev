@@ -1,6 +1,9 @@
 FROM node:25.6.0-slim
 
-RUN apt update && apt install -y procps curl
+# ffmpeg ships both `ffmpeg` and `ffprobe` as system binaries. Processing runs in the
+# worker (TD-05), but the ffprobe/thumbnail integration suites run in this container,
+# so the dev image needs the binaries for `npm test` to pass.
+RUN apt update && apt install -y procps curl ffmpeg && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /home/node/app
 

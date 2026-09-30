@@ -66,7 +66,7 @@ npm run start:prod                       # Run compiled build
 npm test                                 # Unit tests
 npm run test:watch                       # Unit tests in watch mode
 npm run test:cov                         # Coverage report
-npm run test:e2e                         # End-to-end tests (always with --runInBand)
+npm run test:e2e                         # End-to-end tests (pass --runInBand --forceExit yourself)
 
 npx tsc --noEmit                         # Type-check (required before declaring a task done)
 npm run lint                             # ESLint with auto-fix
@@ -84,14 +84,16 @@ curl http://localhost:3000
 
 ### Test execution
 
-Integration and e2e suites share a single test database. They **must** be run with `--runInBand`:
+Integration and e2e suites share a single test database. Both suites **must** be run with `--runInBand --forceExit`, and **neither script embeds the flags** — pass them on the command line every time:
 
 ```bash
-docker compose exec nestjs-api npm test -- --runInBand
-docker compose exec nestjs-api npm run test:e2e   # already configured
+docker compose exec nestjs-api npm test -- --runInBand --forceExit
+docker compose exec nestjs-api npm run test:e2e -- --runInBand --forceExit
 ```
 
-Parallel execution causes FK violations, deadlocks, and cross-suite contamination because suites truncate or seed shared tables concurrently.
+Parallel execution causes FK violations, deadlocks, and cross-suite contamination because suites truncate or seed shared tables concurrently. `--forceExit` is required because Jest does not exit on its own after either suite: the TypeORM connection and the BullMQ Redis connections stay open.
+
+The `video-worker` container stays **up** while the suites run, and nothing has to be stopped. Both suites set `VIDEO_QUEUE_PREFIX` to a namespace of their own in `src/test/queue-prefix.ts` (a Jest `setupFiles` hook), so producer and consumer inside a test meet on the same queue name — the one constant the contract owns — inside a Redis keyspace the live worker never reads. A raw `new Queue(...)`/`new Worker(...)` in a test must pass `prefix: <queueConfig()>.keyPrefix`, or it lands in the wrong keyspace and sees nothing.
 
 During active development, run only the tests related to the file being changed (`npm test -- path/to/file.spec.ts`). Before declaring a task done, run the full suite — see the global `CLAUDE.md` → "Definition of Done (Technical)".
 
@@ -119,7 +121,7 @@ Conventions for **how to write** each kind of test (mocking patterns, AAA struct
 
 These settings are required in `package.json` (jest config) and `test/jest-e2e.json` for the project's tests to work correctly:
 
-- `setupFiles: ["dotenv/config"]` — without this, `.env` is not loaded inside the Jest process. `DB_HOST`, `JWT_SECRET`, etc. fall back to undefined or to the host's `localhost`, breaking container-to-container DNS.
+- `setupFiles: ["dotenv/config", "<the queue-prefix hook>"]`, in this order and in both configs. Without `dotenv/config`, `.env` is not loaded inside the Jest process and `DB_HOST`, `JWT_SECRET`, etc. fall back to undefined or to the host's `localhost`, breaking container-to-container DNS. `src/test/queue-prefix.ts` comes second so it overrides `VIDEO_QUEUE_PREFIX` instead of being overridden by `.env`; dropping it puts the suite back on the live worker's Redis keyspace and the queue assertions turn flaky again.
 - `testRegex: '.*\\.(spec|integration-spec)\\.ts$'` — covers both unit (`*.spec.ts`) and integration (`*.integration-spec.ts`) suffixes.
 
 Do not add new test-file suffixes; if a new test type is needed, update the regex deliberately.
@@ -148,6 +150,38 @@ NestJS with standard module structure. Source lives in `src/`, compiled output i
 
 - Each domain feature gets its own module (e.g., `UsersModule`, `VideosModule`) registered in `AppModule`
 - Controllers handle HTTP routing; Services hold business logic; both are scoped to their module
+
+### Videos (Phase 03)
+
+Video upload, processing and delivery. The API never carries the file bytes: clients upload directly to object storage with presigned URLs, and a separate worker container does the FFmpeg work off a queue.
+
+**Endpoints** — all under `@Controller('videos')`, all behind the global JWT guard:
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/videos` | Pre-register the draft and open the multipart upload |
+| `POST` | `/videos/:publicId/upload/parts` | Sign a batch of part URLs |
+| `POST` | `/videos/:publicId/upload/complete` | Complete the multipart upload and enqueue processing |
+| `DELETE` | `/videos/:publicId/upload` | Abort the upload and discard the draft |
+| `GET` | `/videos/:publicId/playback-url` | Presigned GET for streaming (storage answers `Range` with `206`) |
+| `GET` | `/videos/:publicId/download-url` | Presigned GET with attachment disposition |
+
+**Modules and where the code lives**
+
+- `src/videos/` — `VideosModule`, controller, service, DTOs, the `Video` entity and its domain exceptions.
+- `src/videos/public-id.service.ts` — allocates the short public id. `allocate(persist)` wraps the caller's write in a retry envelope and retries on a `23505` unique violation naming `public_id`.
+- `src/storage/` — `StorageModule` over the S3 SDK, pointed at MinIO. `storage-keys.ts` owns the key layout; `storage.service.ts` owns multipart, presigning and `deleteObject`.
+- `src/queue/` — `QueueModule` over BullMQ. The queue is `video-processing` (`VIDEO_PROCESSING_QUEUE`); `video-processing.contract.ts` is the job payload shape shared by producer and worker. The Redis key namespace is `VIDEO_QUEUE_PREFIX` (`queueConfig().keyPrefix`), set on the shared Bull config so the registered queue and every `@Processor` worker inherit it together.
+- `src/videos/processing/` — the worker side: `ffprobe.adapter.ts` (duration and metadata), `ffmpeg-thumbnail.adapter.ts` (one frame), `spawn-binary.ts` and the BullMQ processor.
+- `src/worker.ts` + `src/worker.module.ts` — the standalone worker entrypoint, run by the `video-worker` container.
+
+**Status model.** Two independent columns on `videos`, not one. `processing_status` moves `awaiting_upload → uploading → processing → ready | failed` (`VideoProcessingStatus`); `publication_status` is `draft | published` (`VideoPublicationStatus`). A video is publicly visible only when `processing_status = 'ready'` **and** `publication_status = 'published'`.
+
+Permanent failure is not signalled with BullMQ's `UnrecoverableError` — the processor uses `@OnWorkerEvent('failed')` and only writes the terminal `failed` state once `job.attemptsMade` reaches the configured ceiling.
+
+**Infrastructure** — `compose.yaml` runs seven services: `nestjs-api`, `db`, `mailpit`, `minio`, `minio-init` (one-shot, creates the private `streamtube` bucket and exits), `redis` and `video-worker`.
+
+FFmpeg is a **system package**, not an npm dependency. Both `Dockerfile.dev` and `Dockerfile.worker` install it via `apt`, so `ffmpeg` and `ffprobe` are on `PATH` in the API container too — the adapter integration suites need them there.
 
 ## Code Conventions
 

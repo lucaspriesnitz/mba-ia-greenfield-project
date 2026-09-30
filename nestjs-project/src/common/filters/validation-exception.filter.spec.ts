@@ -1,6 +1,9 @@
 import { BadRequestException, ArgumentsHost } from '@nestjs/common';
 import { ValidationExceptionFilter } from './validation-exception.filter';
 
+type RpcArgumentsHost = ReturnType<ArgumentsHost['switchToRpc']>;
+type WsArgumentsHost = ReturnType<ArgumentsHost['switchToWs']>;
+
 describe('ValidationExceptionFilter', () => {
   let filter: ValidationExceptionFilter;
   let mockJson: jest.Mock;
@@ -19,8 +22,8 @@ describe('ValidationExceptionFilter', () => {
       }),
       getArgs: () => [],
       getArgByIndex: () => null,
-      switchToRpc: () => ({}) as any,
-      switchToWs: () => ({}) as any,
+      switchToRpc: () => ({}) as RpcArgumentsHost,
+      switchToWs: () => ({}) as WsArgumentsHost,
       getType: () => 'http',
     } as unknown as ArgumentsHost;
   });

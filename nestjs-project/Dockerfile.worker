@@ -1,0 +1,14 @@
+FROM node:25.6.0-slim
+
+# ffmpeg ships both `ffmpeg` and `ffprobe` as system binaries — the worker spawns
+# them directly instead of going through an npm wrapper (per phase-03-videos/TD-05).
+RUN apt update && apt install -y procps curl ffmpeg && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /home/node/app
+
+USER node
+
+# The second entrypoint of the same source tree: a NestJS application context
+# with no HTTP listener (src/worker.ts). Watch mode mirrors Dockerfile.dev, so a
+# source change restarts the consumer without rebuilding the image.
+CMD [ "npm", "run", "start:worker:dev" ]
